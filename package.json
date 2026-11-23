@@ -1,6 +1,6 @@
 {
   "name": "apihub-auto-setup",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Connect Claude Code, Codex, OpenCode, and other coding agents to APIHub.",
   "repository": {
     "type": "git",

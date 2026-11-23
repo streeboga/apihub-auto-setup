@@ -22,7 +22,7 @@ npx apihub-auto-setup
 
 - **Claude Code.** Запустите `claude`.
 - **Codex.** Запустите `codex`. Установщик сохранит токен в локальных настройках провайдера APIHub.
-- **OpenCode.** Если вы раньше выбрали модель другого провайдера, переключитесь на APIHub через `/models`.
+- **OpenCode.** Запустите `opencode`.
 - **Cursor, Continue, Aider и Cline.** Перезапустите свой инструмент, чтобы он перечитал настройки.
 
 Перед записью Go-настройщик сохраняет копии существующих настроек. Описание параметров и восстановления есть в [репозитории apihub-setup](https://github.com/streeboga/apihub-setup?utm_source=github&utm_medium=readme&utm_campaign=apihub-auto-setup).

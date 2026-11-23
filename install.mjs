@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
-import { defaultGateway, replaceSettings } from './src/setup.mjs';
+import { defaultGateway, gatewayBase, replaceSettings } from './src/setup.mjs';
 
 const release = 'https://github.com/streeboga/apihub-setup/releases/download/v0.1.0';
 const checksums = {
@@ -37,15 +38,39 @@ async function askForToken() {
   }
 }
 
-async function saveCodexToken(token) {
-  let path;
+async function existingSettings(...parts) {
   try {
-    path = await realpath(join(homedir(), '.codex', 'config.toml'));
+    return await realpath(join(homedir(), ...parts));
   } catch (error) {
-    if (error.code === 'ENOENT') return;
+    if (error.code === 'ENOENT') return undefined;
     throw error;
   }
+}
 
+async function finishClaudeCode(token) {
+  const path = await existingSettings('.claude', 'settings.json');
+  if (!path) return;
+  const original = await readFile(path, 'utf8');
+  const settings = JSON.parse(original);
+  const env = settings.env;
+  if (env?.ANTHROPIC_AUTH_TOKEN !== token || env.ANTHROPIC_BASE_URL !== defaultGateway) {
+    throw new Error('Настройщик не подтвердил подключение Claude Code к APIHub.');
+  }
+
+  const haiku = 'claude-haiku-4.5';
+  settings.model = haiku;
+  // The Anthropic client appends /v1/messages to this base.
+  env.ANTHROPIC_BASE_URL = gatewayBase(defaultGateway);
+  env.ANTHROPIC_DEFAULT_HAIKU_MODEL = haiku;
+  env.ANTHROPIC_SMALL_FAST_MODEL = haiku;
+  env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-4.6';
+  env.ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-4.6';
+  await replaceSettings(path, original, JSON.stringify(settings, null, 2) + '\n');
+}
+
+async function finishCodex(token) {
+  const path = await existingSettings('.codex', 'config.toml');
+  if (!path) return;
   const original = await readFile(path, 'utf8');
   // This is the provider block emitted by the pinned Go release.
   const envKey = 'env_key = "APIHUB_API_KEY"';
@@ -61,7 +86,59 @@ async function saveCodexToken(token) {
   if (updated === original) {
     throw new Error('Настройщик не подтвердил подключение Codex к APIHub.');
   }
-  await replaceSettings(path, original, updated, 'Codex');
+  // The Go installer can select a model that only supports Chat Completions.
+  const firstTable = updated.search(/^[ \t]*\[/m);
+  const root = updated.slice(0, firstTable);
+  const selection = 'model = "gpt-6.1-sol"';
+  const modelLine = /^[ \t]*model[ \t]*=[^\r\n]*/m;
+  const configured = modelLine.test(root) ? root.replace(modelLine, selection) : selection + '\n' + root;
+  await replaceSettings(path, original, configured + updated.slice(firstTable), 'Codex');
+}
+
+async function openCodeAdapter() {
+  if (!await existingSettings('.config', 'opencode', 'opencode.json')) return;
+  const version = spawnSync('opencode', ['--version'], {
+    encoding: 'utf8',
+    shell: process.platform === 'win32',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 5000,
+  }).stdout?.trim();
+  // OpenCode 1.0 expects the v2 streaming protocol supplied by SDK version 1.
+  if (!/^1\.0\.\d+$/.test(version ?? '')) return;
+  const sdk = '@ai-sdk/openai-compatible';
+  const sdkVersion = '1.0.63';
+  const prefix = join(homedir(), '.config', 'opencode', 'apihub-sdk-' + sdkVersion);
+  const entry = join(prefix, 'node_modules', sdk, 'dist', 'index.mjs');
+  try {
+    await access(entry);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const npm = process.env.npm_execpath;
+    if (!npm) throw new Error('Запустите установщик через npx, чтобы настроить OpenCode.');
+    const result = spawnSync(process.execPath, [
+      npm, 'install', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund',
+      '--registry=https://registry.npmjs.org/', `${sdk}@${sdkVersion}`,
+    ], { stdio: ['ignore', 'inherit', 'inherit'] });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error('Не удалось установить адаптер для OpenCode 1.0.');
+    await access(entry);
+  }
+  return pathToFileURL(entry).href;
+}
+
+async function finishOpenCode(token, adapter) {
+  const path = await existingSettings('.config', 'opencode', 'opencode.json');
+  if (!path) return;
+  const original = await readFile(path, 'utf8');
+  const settings = JSON.parse(original);
+  const provider = settings.provider?.apihub;
+  const model = 'gemini-3.1-flash-lite';
+  if (provider?.options?.apiKey !== token || provider.options.baseURL !== defaultGateway || !provider.models?.[model]) {
+    throw new Error('Настройщик не подтвердил подключение OpenCode к APIHub.');
+  }
+  settings.model = `apihub/${model}`;
+  if (adapter) provider.npm = adapter;
+  await replaceSettings(path, original, JSON.stringify(settings, null, 2) + '\n', 'OpenCode');
 }
 
 async function install() {
@@ -71,6 +148,7 @@ async function install() {
   if (!digest) throw new Error('Для этой системы нет готового установщика.');
 
   const token = await askForToken();
+  const adapter = await openCodeAdapter();
   const name = `apihub-setup-${platform}-${arch}${platform === 'windows' ? '.exe' : ''}`;
   const response = await fetch(`${release}/${name}`, { signal: AbortSignal.timeout(60_000) });
   if (!response.ok) throw new Error(`Не удалось скачать установщик (HTTP ${response.status}).`);
@@ -89,7 +167,9 @@ async function install() {
     });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error('Не удалось завершить настройку агентов.');
-    await saveCodexToken(token);
+    await finishClaudeCode(token);
+    await finishCodex(token);
+    await finishOpenCode(token, adapter);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
