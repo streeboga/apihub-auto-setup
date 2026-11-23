@@ -14,55 +14,16 @@
 
 ### macOS и Linux
 
-Скопируйте блок целиком. Он скачает нужную версию настройщика и попросит токен. При вставке токен на экране не появится.
+Выполните в Bash или Zsh.
 
 ```bash
-setup_apihub() {
-  local apihub_token
-  printf 'Вставьте токен APIHub и нажмите Enter: '
-  IFS= read -rs apihub_token || return 1
-  printf '\n'
-  [ -n "$apihub_token" ] || return 1
-  (
-    case "$(uname -sm)" in
-      'Darwin arm64') target=darwin-arm64 ;;
-      'Darwin x86_64') target=darwin-amd64 ;;
-      'Linux aarch64'|'Linux arm64') target=linux-arm64 ;;
-      'Linux x86_64') target=linux-amd64 ;;
-      *) printf 'Для этой системы нет готового файла настройки.\n' >&2; exit 1 ;;
-    esac
-    dir=$(mktemp -d) || exit 1
-    trap 'rm -f "$dir/apihub-setup"; rmdir "$dir"' EXIT
-    url="https://github.com/streeboga/apihub-setup/releases/download/v0.1.0/apihub-setup-$target"
-    curl -fsSL "$url" -o "$dir/apihub-setup" &&
-    chmod +x "$dir/apihub-setup" &&
-    APIHUB_TOKEN="$apihub_token" "$dir/apihub-setup"
-  ) && export APIHUB_API_KEY="$apihub_token"
-}
-setup_apihub; unset -f setup_apihub
+source /dev/stdin <<< "$(curl -fsSL https://raw.githubusercontent.com/streeboga/apihub-auto-setup/main/install.sh)"
 ```
 
-### Windows (x64)
-
-Вставьте этот блок в PowerShell.
+### Windows (x64), PowerShell
 
 ```powershell
-$setup = Join-Path ([System.IO.Path]::GetTempPath()) "apihub-setup-$([guid]::NewGuid()).exe"
-$url = 'https://github.com/streeboga/apihub-setup/releases/download/v0.1.0/apihub-setup-windows-amd64.exe'
-$previousToken = $env:APIHUB_TOKEN
-try {
-    Invoke-WebRequest -Uri $url -OutFile $setup -ErrorAction Stop
-    $token = Read-Host 'Вставьте токен APIHub и нажмите Enter' -AsSecureString
-    $env:APIHUB_TOKEN = [System.Net.NetworkCredential]::new('', $token).Password
-    if ($env:APIHUB_TOKEN) {
-        & $setup
-        if ($LASTEXITCODE -eq 0) { $env:APIHUB_API_KEY = $env:APIHUB_TOKEN }
-    }
-} finally {
-    $env:APIHUB_TOKEN = $previousToken
-    Remove-Variable token, previousToken -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $setup -ErrorAction SilentlyContinue
-}
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/streeboga/apihub-auto-setup/main/install.ps1)))
 ```
 
 ## После настройки
