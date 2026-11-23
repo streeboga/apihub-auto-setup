@@ -12,10 +12,10 @@
 
 > Подключи APIHub по инструкции из README. Покажи команду для моего терминала и подскажи, как запустить мой агент после настройки. Токен я введу в терминале.
 
-Команда для macOS, Linux и Windows (x64). Нужны Node.js 22.19 или новее и Git.
+Команда для macOS, Linux и Windows (x64). Нужен Node.js 22.19 или новее.
 
 ```sh
-npx --yes github:streeboga/apihub-auto-setup
+npx apihub-auto-setup
 ```
 
 ## После настройки

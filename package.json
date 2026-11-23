@@ -1,7 +1,11 @@
 {
   "name": "apihub-auto-setup",
   "version": "0.1.0",
-  "private": true,
+  "description": "Connect Claude Code, Codex, OpenCode, and other coding agents to APIHub.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/streeboga/apihub-auto-setup.git"
+  },
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -16,5 +20,11 @@
   },
   "bin": {
     "apihub-auto-setup": "./install.mjs"
-  }
+  },
+  "files": [
+    "install.mjs",
+    "setup.mjs",
+    "src/agent.mjs",
+    "src/setup.mjs"
+  ]
 }
