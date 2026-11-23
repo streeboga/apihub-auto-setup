@@ -6,30 +6,22 @@
 
 1. [Зарегистрируйтесь в APIHub](https://hub.gnzs.pro/register?utm_source=github&utm_medium=readme&utm_campaign=apihub-auto-setup). Первые запросы можно оплатить стартовым бонусом, который APIHub начисляет при регистрации.
 2. [Создайте и скопируйте токен](https://hub.gnzs.pro/app/tokens?utm_source=github&utm_medium=readme&utm_campaign=apihub-auto-setup).
-3. Запустите команду для своей системы. Когда терминал попросит токен, вставьте его и нажмите Enter. Настройщик найдёт поддерживаемые приложения по их файлам настроек и подключит их к APIHub. Откройте новую сессию в агенте.
+3. Запустите команду ниже. Когда терминал попросит токен, вставьте его и нажмите Enter. Настройщик найдёт поддерживаемые приложения по их файлам настроек и подключит их к APIHub. Откройте новую сессию в агенте.
 
 Можно попросить об этом агента, в котором вы уже работаете. Отправьте ему ссылку на этот README и сообщение.
 
-> Подключи APIHub по инструкции из README. Определи мою систему, подготовь команду для моего терминала и подскажи, как запустить мой агент после настройки. Токен я введу в терминале.
+> Подключи APIHub по инструкции из README. Покажи команду для моего терминала и подскажи, как запустить мой агент после настройки. Токен я введу в терминале.
 
-### macOS и Linux
+Команда для macOS, Linux и Windows (x64). Нужны Node.js 22.19 или новее и Git.
 
-Выполните в Bash или Zsh.
-
-```bash
-source /dev/stdin <<< "$(curl -fsSL https://raw.githubusercontent.com/streeboga/apihub-auto-setup/main/install.sh)"
-```
-
-### Windows (x64), PowerShell
-
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/streeboga/apihub-auto-setup/main/install.ps1)))
+```sh
+npx --yes github:streeboga/apihub-auto-setup
 ```
 
 ## После настройки
 
 - **Claude Code.** Запустите `claude`.
-- **Codex.** Запустите `codex` в том же терминале, где вводили токен. В новом терминале задайте `APIHUB_API_KEY` перед запуском.
+- **Codex.** Запустите `codex`. Установщик сохранит токен в локальных настройках провайдера APIHub.
 - **OpenCode.** Если вы раньше выбрали модель другого провайдера, переключитесь на APIHub через `/models`.
 - **Cursor, Continue, Aider и Cline.** Перезапустите свой инструмент, чтобы он перечитал настройки.
 

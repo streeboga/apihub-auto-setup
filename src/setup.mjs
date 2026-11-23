@@ -52,13 +52,13 @@ async function settingsPath() {
   }
 }
 
-async function replaceSettings(path, original, content) {
+export async function replaceSettings(path, original, content, client = 'Claude Code') {
   const staged = join(dirname(path), `.apihub-settings-${randomUUID()}`);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   try {
     await writeFile(staged, content, { flag: 'wx', mode: 0o600 });
     if (await readSettings(path) !== original) {
-      throw new Error('Claude Code settings changed during setup. Retry the command.');
+      throw new Error(`${client} settings changed during setup. Retry the command.`);
     }
     await rename(staged, path);
   } finally {
