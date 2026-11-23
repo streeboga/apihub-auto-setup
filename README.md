@@ -1,58 +1,77 @@
-# APIHub Auto Setup
+# APIHub для кодинг-агентов
 
-Открытый настройщик Claude Code CLI для macOS, Windows и Linux. Нужен Node.js 22.19+.
-Сборка бинарника и сертификат Apple не требуются.
+Подключите модели APIHub к своему Claude Code, Codex или OpenCode. Продолжайте работать в привычном агенте и оплачивайте запросы с одного баланса APIHub.
 
-## Установка
+## Быстрый старт
 
-```sh
-git clone https://github.com/streeboga/apihub-auto-setup.git
-cd apihub-auto-setup
+1. [Зарегистрируйтесь в APIHub](https://hub.gnzs.pro/register?utm_source=github&utm_medium=readme&utm_campaign=apihub-auto-setup). Первые запросы можно оплатить стартовым бонусом, который APIHub начисляет при регистрации.
+2. [Создайте и скопируйте токен](https://hub.gnzs.pro/app/tokens?utm_source=github&utm_medium=readme&utm_campaign=apihub-auto-setup).
+3. Запустите команду для своей системы. Когда терминал попросит токен, вставьте его и нажмите Enter. Настройщик найдёт поддерживаемые приложения по их файлам настроек и подключит их к APIHub. Откройте новую сессию в агенте.
+
+Можно попросить об этом агента, в котором вы уже работаете. Отправьте ему ссылку на этот README и сообщение.
+
+> Подключи APIHub по инструкции из README. Определи мою систему, подготовь команду для моего терминала и подскажи, как запустить мой агент после настройки. Токен я введу в терминале.
+
+### macOS и Linux
+
+Скопируйте блок целиком. Он скачает нужную версию настройщика и попросит токен. При вставке токен на экране не появится.
+
+```bash
+setup_apihub() {
+  local apihub_token
+  printf 'Вставьте токен APIHub и нажмите Enter: '
+  IFS= read -rs apihub_token || return 1
+  printf '\n'
+  [ -n "$apihub_token" ] || return 1
+  (
+    case "$(uname -sm)" in
+      'Darwin arm64') target=darwin-arm64 ;;
+      'Darwin x86_64') target=darwin-amd64 ;;
+      'Linux aarch64'|'Linux arm64') target=linux-arm64 ;;
+      'Linux x86_64') target=linux-amd64 ;;
+      *) printf 'Для этой системы нет готового файла настройки.\n' >&2; exit 1 ;;
+    esac
+    dir=$(mktemp -d) || exit 1
+    trap 'rm -f "$dir/apihub-setup"; rmdir "$dir"' EXIT
+    url="https://github.com/streeboga/apihub-setup/releases/download/v0.1.0/apihub-setup-$target"
+    curl -fsSL "$url" -o "$dir/apihub-setup" &&
+    chmod +x "$dir/apihub-setup" &&
+    APIHUB_TOKEN="$apihub_token" "$dir/apihub-setup"
+  ) && export APIHUB_API_KEY="$apihub_token"
+}
+setup_apihub; unset -f setup_apihub
 ```
 
-Передайте свой API-ключ APIHub через переменную окружения `APIHUB_TOKEN`.
-Получить ключ можно в [кабинете APIHub](https://hub.gnzs.pro/app/tokens).
+### Windows (x64)
 
-## Настройка с Pi
+Вставьте этот блок в PowerShell.
 
-```sh
-npm ci --ignore-scripts
-node setup.mjs --dry-run --agent "Настрой Claude Code на минимальную цену"
-node setup.mjs --apply --agent "Настрой Claude Code на минимальную цену"
+```powershell
+$setup = Join-Path ([System.IO.Path]::GetTempPath()) "apihub-setup-$([guid]::NewGuid()).exe"
+$url = 'https://github.com/streeboga/apihub-setup/releases/download/v0.1.0/apihub-setup-windows-amd64.exe'
+$previousToken = $env:APIHUB_TOKEN
+try {
+    Invoke-WebRequest -Uri $url -OutFile $setup -ErrorAction Stop
+    $token = Read-Host 'Вставьте токен APIHub и нажмите Enter' -AsSecureString
+    $env:APIHUB_TOKEN = [System.Net.NetworkCredential]::new('', $token).Password
+    if ($env:APIHUB_TOKEN) {
+        & $setup
+        if ($LASTEXITCODE -eq 0) { $env:APIHUB_API_KEY = $env:APIHUB_TOKEN }
+    }
+} finally {
+    $env:APIHUB_TOKEN = $previousToken
+    Remove-Variable token, previousToken -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $setup -ErrorAction SilentlyContinue
+}
 ```
 
-Pi получает вашу просьбу через шлюз APIHub, используя модель `apihub-auto` и режим `reliable`.
-Ключ передаётся в заголовке запроса. Единственный инструмент Pi предлагает один из четырёх
-режимов Claude Code. Сохранение настроек выполняет скрипт при запуске с `--apply`.
-С `--dry-run --agent` выполняется один запрос к шлюзу и показывается результат.
+## После настройки
 
-## Ручная настройка
+- **Claude Code.** Запустите `claude`.
+- **Codex.** Запустите `codex` в том же терминале, где вводили токен. В новом терминале задайте `APIHUB_API_KEY` перед запуском.
+- **OpenCode.** Если вы раньше выбрали модель другого провайдера, переключитесь на APIHub через `/models`.
+- **Cursor, Continue, Aider и Cline.** Перезапустите свой инструмент, чтобы он перечитал настройки.
 
-```sh
-node setup.mjs --dry-run --strategy cheaper
-node setup.mjs --apply --strategy cheaper
-node setup.mjs --restore
-```
+Перед записью Go-настройщик сохраняет копии существующих настроек. Описание параметров и восстановления есть в [репозитории apihub-setup](https://github.com/streeboga/apihub-setup?utm_source=github&utm_medium=readme&utm_campaign=apihub-auto-setup).
 
-Ручной режим работает без установки npm-зависимостей и запросов к шлюзу.
-Стратегии `optimal`, `cheaper`, `faster` и `reliable` соответствуют балансу, цене,
-скорости и надёжности. По умолчанию используется `optimal`.
-
-Скрипт редактирует `~/.claude/settings.json` или файл в `CLAUDE_CONFIG_DIR`.
-Предыдущие настройки сохраняются в соседнем файле, если они уже были.
-После настройки запустите новую сессию Claude Code.
-
-Claude Code отправляет `apihub-auto` и заголовок `X-APIHub-Strategy` на шлюз.
-Шлюз выбирает фактическую модель, продавца и резерв. На выбранном шлюзе
-должен быть включён маршрут `apihub-auto`. Графическое приложение Claude Desktop
-использует отдельную конфигурацию.
-
-## Проверка
-
-```sh
-npm ci --ignore-scripts
-npm test
-```
-
-Тесты поднимают локальный стенд с протоколом Anthropic Messages.
-Для проверки установленного Claude Code передайте путь к нему в `CLAUDE_CODE_SMOKE`.
+[Открыть APIHub](https://hub.gnzs.pro/?utm_source=github&utm_medium=readme&utm_campaign=apihub-auto-setup)
