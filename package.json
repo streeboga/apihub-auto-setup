@@ -1,7 +1,7 @@
 {
   "name": "apihub-auto-setup",
-  "version": "0.1.1",
-  "description": "Connect Claude Code, Codex, OpenCode, and other coding agents to APIHub.",
+  "version": "0.1.4",
+  "description": "Launch OpenCode, DeepSeek Harness, Kimi Code, Pi and Claude through APIHub Auto.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/streeboga/apihub-auto-setup.git"
@@ -15,16 +15,26 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "1.6.0",
-    "@earendil-works/pi-ai": "1.6.0"
+    "@ai-sdk/openai-compatible": "1.0.32",
+    "cross-spawn": "7.0.6",
+    "opencode-chat-sdk-v3": "npm:@ai-sdk/openai-compatible@2.0.41"
   },
   "bin": {
-    "apihub-auto-setup": "./install.mjs"
+    "apihub-auto-setup": "install.mjs"
   },
   "files": [
     "install.mjs",
     "setup.mjs",
     "src/agent.mjs",
-    "src/setup.mjs"
-  ]
+    "src/setup.mjs",
+    "src/installer.mjs",
+    "src/desktop-launch.mjs",
+    "src/tui.mjs",
+    "src/marketplace.mjs",
+    "src/models.mjs"
+  ],
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "1.6.0",
+    "@earendil-works/pi-ai": "1.6.0"
+  }
 }

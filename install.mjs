@@ -1,190 +1,177 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { access, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { createInterface } from 'node:readline';
-import { Writable } from 'node:stream';
-import { defaultGateway, gatewayBase, replaceSettings } from './src/setup.mjs';
+import { askMarketplaceQuestion, askSecret, back, chooseAdditionalModels, chooseAgent, chooseAgentAction, chooseAgentSettings, chooseMode, color, confirmRestore, exit, offerAdditionalModels, returnToMenu, terminalLink, withProgress } from './src/tui.mjs';
+import { marketplaceLinks } from './src/marketplace.mjs';
+import { fetchModelCatalog, modelsForHarness } from './src/models.mjs';
+import { defaultGateway, model } from './src/setup.mjs';
+import {
+  detectHarnesses, getAdditionalModels, getHarnessStrategy, getSavedToken, harnesses, launchAgent,
+  prepareRestoration, restoreClaudeCode, saveAdditionalModels, saveHarnessStrategy, saveToken,
+} from './src/installer.mjs';
 
-const release = 'https://github.com/streeboga/apihub-setup/releases/download/v0.1.0';
-const checksums = {
-  'darwin-arm64': '4d6a670fc46b07d5bb0ab687bfb037a36707e851d751e433ebc43f1c99a1439c',
-  'darwin-x64': 'f908c12156c22c9883ae72e343f57cd1458e93101735454a8733476b3b0c97c0',
-  'linux-arm64': 'a87d93c5f8c58ce17eaa972f82a88125ed6356efbb743adf0e668afefe39968e',
-  'linux-x64': 'b0eddf6cdc09c6832c02260b2fa756e0519bc0b6ae348f04dde2189883f60cf2',
-  'win32-x64': '6597807cec37fad107ead231df1e752df9278d94677d9669e22b557ae8806c85',
-};
+const tokenHelpUrl = 'https://hub.gnzs.pro/app/keys?utm_source=cli&utm_medium=npx&utm_campaign=apihub-auto-setup';
+const supported = harnesses.filter(({ unavailable, guide }) => !unavailable && !guide).map(({ value }) => value);
 
-async function askForToken() {
-  if (!process.stdin.isTTY) {
-    throw new Error('Запустите установщик в терминале, чтобы ввести токен APIHub.');
+async function resolveToken({ replace = false } = {}) {
+  const fromEnv = process.env.APIHUB_TOKEN?.trim();
+  if (fromEnv && !replace) return fromEnv;
+  const saved = !replace && await withProgress('Ищем сохранённый ключ APIHub', getSavedToken);
+  if (saved) {
+    console.log(color('success', 'Используем сохранённый ключ APIHub.'));
+    return saved;
   }
-  const muted = new Writable({ write(_chunk, _encoding, done) { done(); } });
-  const input = createInterface({ input: process.stdin, output: muted, terminal: true, historySize: 0 });
-  process.stderr.write('Вставьте токен APIHub и нажмите Enter: ');
-  try {
-    for await (const line of input) {
-      const token = line.trim();
-      if (/^[!-~]+$/.test(token)) return token;
-      break;
+  return askSecret(`Откройте страницу «Ключи APIHub»\n${terminalLink(tokenHelpUrl)}\n\nВставьте ключ и нажмите Enter.\n`);
+}
+
+function persistToken(token) {
+  return withProgress('Сохраняем ключ APIHub', () => saveToken(token));
+}
+
+function restore() {
+  return withProgress('Восстанавливаем настройки Claude Code', ({ stop }) => restoreClaudeCode(stop));
+}
+
+async function runHarness(harness, token, strategy) {
+  const result = await withProgress(`Подключаем ${harness.label}`, ({ stop }) =>
+    launchAgent(harness.value, token, { strategy, beforeOutput: stop }));
+  if (result.signal) throw new Error(`${harness.label}: процесс завершился по сигналу ${result.signal}.`);
+  if (result.code !== 0) throw new Error(`${harness.label}: код завершения ${result.code}.`);
+}
+
+async function configureLaunch(harness) {
+  const token = await resolveToken();
+  if (token === exit || token === back) return token;
+  if (await getAdditionalModels() === undefined) {
+    const choice = await offerAdditionalModels();
+    if (choice === back || choice === exit) return choice;
+    if (choice === 'models') {
+      const result = await configureModels();
+      if (result === back || result === exit) return result;
+    } else {
+      await saveAdditionalModels([]);
     }
-    throw new Error('Для настройки нужен токен APIHub.');
-  } finally {
-    input.close();
-    process.stderr.write('\n');
+  }
+  await runHarness(harness, token, await getHarnessStrategy(harness));
+  await persistToken(token);
+}
+
+async function configureSettings(harness) {
+  const strategy = await getHarnessStrategy(harness);
+  const saved = await getAdditionalModels() || [];
+  const models = modelsForHarness(saved, harness);
+  const selected = await chooseAgentSettings(harness, strategy, {
+    gateway: process.env.APIHUB_GATEWAY?.trim() || defaultGateway, model, tokenHelpUrl, models, saved,
+  });
+  if (selected === exit || selected === back) return selected;
+  await saveHarnessStrategy(harness, selected);
+}
+
+async function configureModels() {
+  const saved = await getAdditionalModels() || [];
+  let offline = false;
+  const catalog = await withProgress('Загружаем каталог APIHub', () => fetchModelCatalog()).catch((error) => {
+    if (!saved.length) throw error;
+    offline = true;
+    return [];
+  });
+  const selected = await chooseAdditionalModels(catalog, saved, { offline });
+  if (selected === back || selected === exit) return selected;
+  await saveAdditionalModels(selected);
+  console.log(`Дополнительные модели сохранены · ${selected.length}`);
+}
+
+async function configure() {
+  const detected = await withProgress('Ищем установленные агенты', detectHarnesses);
+  let previousAgent;
+  while (true) {
+    const agent = await chooseAgent(detected, previousAgent);
+    if (agent === back || agent === exit) return agent;
+    const harness = detected.find(({ value }) => value === agent);
+    previousAgent = agent;
+    while (true) {
+      const action = await chooseAgentAction(harness);
+      if (action === exit) return exit;
+      if (action === back) break;
+      if (action === 'settings') {
+        if (await configureSettings(harness) === exit) return exit;
+        continue;
+      }
+      if (action === 'restore') {
+        const restoration = await prepareRestoration(agent);
+        if (restoration.apply) {
+          const confirm = await confirmRestore(`${harness.label} · Восстановить настройки\n${restoration.message}`);
+          if (confirm === exit) return exit;
+          if (confirm === back) continue;
+          process.stdout.write('\n');
+          const message = await withProgress(`Восстанавливаем настройки ${harness.label}`, restoration.apply);
+          console.log(color('success', message));
+        } else {
+          process.stdout.write('\n');
+          console.log(restoration.message);
+        }
+        return;
+      }
+      const result = await configureLaunch(harness);
+      if (result !== back) return result;
+    }
   }
 }
 
-async function existingSettings(...parts) {
-  try {
-    return await realpath(join(homedir(), ...parts));
-  } catch (error) {
-    if (error.code === 'ENOENT') return undefined;
-    throw error;
+async function interactive() {
+  if (!process.stdin.isTTY) {
+    const agent = process.env.APIHUB_AGENT;
+    if (!agent) throw new Error(`Для запуска без TUI задайте APIHUB_AGENT. Доступные значения: ${supported.join(', ')}.`);
+    const harness = (await detectHarnesses()).find(({ value }) => value === agent);
+    if (!harness?.available) throw new Error(harness ? `${harness.label}: ${harness.note}.` : `Неизвестный кодинг-агент: ${agent}.`);
+    const token = await resolveToken();
+    await runHarness(harness, token, process.env.APIHUB_STRATEGY || await getHarnessStrategy(harness));
+    await persistToken(token);
+    return;
   }
-}
-
-async function finishClaudeCode(token) {
-  const path = await existingSettings('.claude', 'settings.json');
-  if (!path) return;
-  const original = await readFile(path, 'utf8');
-  const settings = JSON.parse(original);
-  const env = settings.env;
-  if (env?.ANTHROPIC_AUTH_TOKEN !== token || env.ANTHROPIC_BASE_URL !== defaultGateway) {
-    throw new Error('Настройщик не подтвердил подключение Claude Code к APIHub.');
-  }
-
-  const haiku = 'claude-haiku-4.5';
-  settings.model = haiku;
-  // The Anthropic client appends /v1/messages to this base.
-  env.ANTHROPIC_BASE_URL = gatewayBase(defaultGateway);
-  env.ANTHROPIC_DEFAULT_HAIKU_MODEL = haiku;
-  env.ANTHROPIC_SMALL_FAST_MODEL = haiku;
-  env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-4.6';
-  env.ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-4.6';
-  await replaceSettings(path, original, JSON.stringify(settings, null, 2) + '\n');
-}
-
-async function finishCodex(token) {
-  const path = await existingSettings('.codex', 'config.toml');
-  if (!path) return;
-  const original = await readFile(path, 'utf8');
-  // This is the provider block emitted by the pinned Go release.
-  const envKey = 'env_key = "APIHUB_API_KEY"';
-  const provider = [
-    '[model_providers.apihub]',
-    'name = "APIHUB"',
-    `base_url = "${defaultGateway}"`,
-    envKey,
-    '',
-  ].join('\n');
-  const updated = original.replace(provider, () =>
-    provider.replace(envKey, () => `experimental_bearer_token = ${JSON.stringify(token)}`));
-  if (updated === original) {
-    throw new Error('Настройщик не подтвердил подключение Codex к APIHub.');
-  }
-  // The Go installer can select a model that only supports Chat Completions.
-  const firstTable = updated.search(/^[ \t]*\[/m);
-  const root = updated.slice(0, firstTable);
-  const selection = 'model = "gpt-6.1-sol"';
-  const modelLine = /^[ \t]*model[ \t]*=[^\r\n]*/m;
-  const configured = modelLine.test(root) ? root.replace(modelLine, selection) : selection + '\n' + root;
-  await replaceSettings(path, original, configured + updated.slice(firstTable), 'Codex');
-}
-
-async function openCodeAdapter() {
-  if (!await existingSettings('.config', 'opencode', 'opencode.json')) return;
-  const version = spawnSync('opencode', ['--version'], {
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 5000,
-  }).stdout?.trim();
-  // OpenCode 1.0 expects the v2 streaming protocol supplied by SDK version 1.
-  if (!/^1\.0\.\d+$/.test(version ?? '')) return;
-  const sdk = '@ai-sdk/openai-compatible';
-  const sdkVersion = '1.0.63';
-  const prefix = join(homedir(), '.config', 'opencode', 'apihub-sdk-' + sdkVersion);
-  const entry = join(prefix, 'node_modules', sdk, 'dist', 'index.mjs');
-  try {
-    await access(entry);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    const npm = process.env.npm_execpath;
-    if (!npm) throw new Error('Запустите установщик через npx, чтобы настроить OpenCode.');
-    const result = spawnSync(process.execPath, [
-      npm, 'install', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund',
-      '--registry=https://registry.npmjs.org/', `${sdk}@${sdkVersion}`,
-    ], { stdio: ['ignore', 'inherit', 'inherit'] });
-    if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error('Не удалось установить адаптер для OpenCode 1.0.');
-    await access(entry);
-  }
-  return pathToFileURL(entry).href;
-}
-
-async function finishOpenCode(token, adapter) {
-  const path = await existingSettings('.config', 'opencode', 'opencode.json');
-  if (!path) return;
-  const original = await readFile(path, 'utf8');
-  const settings = JSON.parse(original);
-  const provider = settings.provider?.apihub;
-  const model = 'gemini-3.1-flash-lite';
-  if (provider?.options?.apiKey !== token || provider.options.baseURL !== defaultGateway || !provider.models?.[model]) {
-    throw new Error('Настройщик не подтвердил подключение OpenCode к APIHub.');
-  }
-  settings.model = `apihub/${model}`;
-  if (adapter) provider.npm = adapter;
-  await replaceSettings(path, original, JSON.stringify(settings, null, 2) + '\n', 'OpenCode');
-}
-
-async function install() {
-  const platform = process.platform === 'win32' ? 'windows' : process.platform;
-  const arch = process.arch === 'x64' ? 'amd64' : process.arch;
-  const digest = checksums[`${process.platform}-${process.arch}`];
-  if (!digest) throw new Error('Для этой системы нет готового установщика.');
-
-  const token = await askForToken();
-  const adapter = await openCodeAdapter();
-  const name = `apihub-setup-${platform}-${arch}${platform === 'windows' ? '.exe' : ''}`;
-  const response = await fetch(`${release}/${name}`, { signal: AbortSignal.timeout(60_000) });
-  if (!response.ok) throw new Error(`Не удалось скачать установщик (HTTP ${response.status}).`);
-  const binary = Buffer.from(await response.arrayBuffer());
-  if (createHash('sha256').update(binary).digest('hex') !== digest) {
-    throw new Error('Контрольная сумма установщика не совпала.');
-  }
-
-  const dir = await mkdtemp(join(tmpdir(), 'apihub-install-'));
-  const executable = join(dir, name);
-  try {
-    await writeFile(executable, binary, { flag: 'wx', mode: 0o700 });
-    const result = spawnSync(executable, [], {
-      env: { ...process.env, APIHUB_TOKEN: token },
-      stdio: 'inherit',
-    });
-    if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error('Не удалось завершить настройку агентов.');
-    await finishClaudeCode(token);
-    await finishCodex(token);
-    await finishOpenCode(token, adapter);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
+  while (true) {
+    const mode = await chooseMode();
+    if (mode === exit) return;
+    try {
+      if (mode === 'change-key') {
+        const token = await resolveToken({ replace: true });
+        if (token === exit) return;
+        if (token === back) continue;
+        await persistToken(token);
+        console.log(color('success', 'Ключ сохранён.'));
+      } else if (mode === 'models') {
+        const result = await configureModels();
+        if (result === exit) return;
+        continue;
+      } else if (mode === 'marketplace') {
+        const question = await askMarketplaceQuestion();
+        if (question === exit) return;
+        if (question === back) continue;
+        console.log(marketplaceLinks(question).join('\n\n'));
+      } else {
+        const result = await configure();
+        if (result === exit) return;
+        if (result === back) continue;
+      }
+    } catch (error) {
+      console.error(color('error', `APIHub: ${error.message}`, process.stderr));
+    }
+    const result = await returnToMenu();
+    if (result === exit) return;
   }
 }
 
 try {
   const args = process.argv.slice(2);
   if (args.length === 1 && ['--help', '-h'].includes(args[0])) {
-    console.log('Запустите без аргументов, чтобы подключить найденные агенты к APIHub.');
+    console.log('apihub-auto-setup — настройка и запуск кодинг-агентов через APIHub Auto.');
+    console.log(`APIHUB_AGENT: ${supported.join(', ')}.`);
+  } else if (args.length === 1 && args[0] === '--restore') {
+    await restore();
   } else if (args.length === 0) {
-    await install();
+    await interactive();
   } else {
-    throw new Error('Установщик запускается без аргументов.');
+    throw new Error('Запустите установщик без аргументов или с --restore.');
   }
 } catch (error) {
-  console.error(`APIHub: ${error.message}`);
+  console.error(color('error', `APIHub: ${error.message}`, process.stderr));
   process.exitCode = 1;
 }

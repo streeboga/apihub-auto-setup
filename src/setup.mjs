@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 export const model = 'apihub-auto';
 export const defaultGateway = 'https://g.gnzs.pro/g/v1';
 export const strategies = ['optimal', 'cheaper', 'faster', 'reliable'];
-const strategyHeader = 'X-APIHub-Strategy';
+export const strategyHeader = 'X-APIHub-Strategy';
 
 export function gatewayBase(value) {
   let url;
@@ -74,12 +74,10 @@ export function requireToken() {
   return token;
 }
 
-export async function applyClaudeCode(strategy, base, token) {
+export function prepareClaudeCodeSettings(strategy, base, token, original) {
   if (!strategies.includes(strategy)) {
     throw new Error(`Choose a strategy from ${strategies.join(', ')}.`);
   }
-  const path = await settingsPath();
-  const original = await readSettings(path);
   let settings;
   try {
     settings = original === undefined ? {} : JSON.parse(original);
@@ -101,7 +99,6 @@ export async function applyClaudeCode(strategy, base, token) {
   }
   const headers = lines.filter((line) => headerName(line) !== strategyHeader.toLowerCase());
   headers.push(`${strategyHeader}: ${strategy}`);
-
   settings.model = model;
   settings.env = {
     ...env,
@@ -111,7 +108,16 @@ export async function applyClaudeCode(strategy, base, token) {
     ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: 'APIHub Auto',
     ANTHROPIC_CUSTOM_HEADERS: headers.join('\n'),
   };
-  const updated = JSON.stringify(settings, null, 2) + '\n';
+  return JSON.stringify(settings, null, 2) + '\n';
+}
+
+export async function applyClaudeCode(strategy, base, token) {
+  if (!strategies.includes(strategy)) {
+    throw new Error(`Choose a strategy from ${strategies.join(', ')}.`);
+  }
+  const path = await settingsPath();
+  const original = await readSettings(path);
+  const updated = prepareClaudeCodeSettings(strategy, base, token, original);
   if (updated === original) return { path, changed: false };
 
   if (original !== undefined) {
@@ -169,7 +175,7 @@ export async function run(args) {
       ({ chooseStrategy } = await import('./agent.mjs'));
     } catch (error) {
       if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error;
-      throw new Error('Install Pi with npm ci --ignore-scripts before using --agent.');
+      throw new Error('Run npm ci --include=dev --ignore-scripts in the repository checkout before using setup.mjs --agent.');
     }
     strategy = await chooseStrategy(values.agent, base, token);
   }
