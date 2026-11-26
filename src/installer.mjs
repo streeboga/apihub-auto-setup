@@ -179,7 +179,8 @@ async function writeDesktopProfile(token, strategy = 'optimal', models = []) {
       ? previous.inferenceModels.slice(1).filter((entry) => entry && typeof entry.name === 'string' && typeof entry.labelOverride === 'string')
         .map(({ name, labelOverride }) => ({ id: name, name: labelOverride }))
       : [];
-    if (strategies.some((mode) => existing === JSON.stringify(desktopProfile(token, mode, previousModels), null, 2) + '\n')) {
+    if (strategies.some((mode) => [false, true].some((legacy) =>
+      existing === JSON.stringify(desktopProfile(token, mode, previousModels, { legacy }), null, 2) + '\n'))) {
       await replaceSettings(path, existing, content, 'Claude Desktop');
       return { path, changed: true };
     }

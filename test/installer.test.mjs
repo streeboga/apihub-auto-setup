@@ -264,7 +264,7 @@ test('Claude Code launch uses a temporary profile and removes it after exit', as
     deny: ['Edit(//private/tmp/secrets/**)'],
     ask: ['Bash(git push:*)'],
   };
-  const original = JSON.stringify({ permissions }) + '\n';
+  const original = JSON.stringify({ permissions, env: { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' } }) + '\n';
   await writeFile(join(claudeDir, 'settings.json'), original);
   const report = join(home, 'session-report.json');
   const fake = join(binDir, 'claude');
@@ -280,6 +280,11 @@ test('Claude Code launch uses a temporary profile and removes it after exit', as
     assert.equal(session.model, 'apihub-auto');
     assert.deepEqual(args, ['--model', 'apihub-auto']);
     assert.equal(session.env.ANTHROPIC_AUTH_TOKEN, 'session-key');
+    assert.equal(session.env.CLAUDE_CODE_SUBAGENT_MODEL, 'apihub-auto');
+    assert.equal(session.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE, '1');
+    assert.equal(session.env.ANTHROPIC_SMALL_FAST_MODEL, 'apihub-auto');
+    assert.equal(session.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'apihub-auto');
+    assert.equal(session.env.CLAUDE_CODE_AUTO_MODE_MODEL, 'apihub-auto/claude-haiku-4-5');
     assert.equal(contextWindow, '65536');
     assert.deepEqual(session.permissions, { ...permissions, allow: ['Bash(npm test:*)', 'Edit(src/**)'] });
     assert.equal(await readFile(join(claudeDir, 'settings.json'), 'utf8'), original);
@@ -394,6 +399,36 @@ test('Desktop leaves managed profile selection intact', async (t) => {
   await assert.rejects(activateDesktopProfile(token, home), { message: /профиль организации/ });
   assert.equal(await readFile(meta, 'utf8'), managed);
   assert.deepEqual(await readdir(library), ['_meta.json']);
+});
+
+test('Desktop cheaper config sets service models and restores existing values on mode change', async (t) => {
+  const { home } = await fixture(t);
+  await activateDesktopProfile(token, home);
+  const library = join(home, 'Claude-3p', 'configLibrary');
+  const { appliedId } = JSON.parse(await readFile(join(library, '_meta.json'), 'utf8'));
+  const path = join(library, appliedId + '.json');
+  const readProfile = async () => JSON.parse(await readFile(path, 'utf8'));
+  const original = await readProfile();
+  original.autoModeClassifierModel = 'claude-sonnet-5';
+  original.claudeCodeSettings = { env: { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet', KEEP_ME: 'yes' } };
+  await writeFile(path, JSON.stringify(original));
+
+  await activateDesktopProfile(token, home, 'cheaper');
+  const cheaper = await readProfile();
+  assert.equal(cheaper.autoModeClassifierModel, 'apihub-auto/claude-haiku-4-5');
+  assert.ok(cheaper.inferenceModels.some(({ name }) => name === cheaper.autoModeClassifierModel));
+  assert.equal(cheaper.claudeCodeSettings.env.CLAUDE_CODE_SUBAGENT_MODEL, 'claude-fable-5');
+  assert.equal(cheaper.claudeCodeSettings.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE, '1');
+  assert.equal(cheaper.claudeCodeSettings.env.ANTHROPIC_SMALL_FAST_MODEL, 'claude-fable-5');
+  assert.equal(cheaper.claudeCodeSettings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-fable-5');
+  assert.equal(cheaper.claudeCodeSettings.env.KEEP_ME, 'yes');
+  assert.equal(await activateDesktopProfile(token, home, 'cheaper'), false);
+
+  await activateDesktopProfile(token, home, 'reliable');
+  const reliable = await readProfile();
+  assert.equal(reliable.autoModeClassifierModel, original.autoModeClassifierModel);
+  assert.deepEqual(reliable.claudeCodeSettings, original.claudeCodeSettings);
+  assert.deepEqual(reliable.inferenceModels, original.inferenceModels);
 });
 
 test('npm bin launches Codex with the Auto Responses provider for this run', async (t) => {

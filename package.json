@@ -1,6 +1,6 @@
 {
   "name": "apihub-auto-setup",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Launch OpenCode, DeepSeek Harness, Kimi Code, Pi and Claude through APIHub Auto.",
   "repository": {
     "type": "git",

@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { replaceSettings, strategyHeader } from './setup.mjs';
+import { autoClaudeClassifier, cheapClaudeModels, replaceSettings, strategyHeader } from './setup.mjs';
 
 const exec = promisify(execFile);
 export const desktopGateway = 'https://g.gnzs.pro/g/v1/claude-desktop';
@@ -12,6 +12,7 @@ export const desktopModel = 'claude-fable-5';
 const desktopModelPrefix = 'claude-apihub-';
 const profileId = '980b8947-a3de-4a66-8afc-07d47ebc8012';
 const profileName = 'APIHub Auto';
+const cheapClassifier = { id: autoClaudeClassifier, name: 'APIHub Auto · проверка действий' };
 const supportRoot = () => join(homedir(), 'Library', 'Application Support');
 const previousPath = (support) => join(support, 'Claude-3p', 'apihub-auto-previous.json');
 const managedModelsPath = (support) => join(support, 'Claude-3p', 'apihub-auto-models.json');
@@ -20,6 +21,7 @@ const appSettings = (support) => ['Claude', 'Claude-3p'].map((app) =>
   configFile(join(support, app, 'claude_desktop_config.json')));
 
 function desktopModelName(id) {
+  if (id === autoClaudeClassifier) return id;
   if (id !== desktopModel && /^claude-(opus|sonnet|haiku|fable|mythos)-/.test(id)) return id;
   if (/^claude-apihub-(?:[0-9a-f]{2})+$/.test(id)) return id;
   return desktopModelPrefix + Buffer.from(id).toString('hex');
@@ -29,11 +31,18 @@ function desktopModelEntry({ id, name }) {
   const route = desktopModelName(id);
   return {
     name: route, labelOverride: name,
-    ...(route.startsWith(desktopModelPrefix) ? { behavesAs: 'claude-haiku-4-5', maxEffort: 'low' } : {}),
+    ...(route.startsWith(desktopModelPrefix) || route === autoClaudeClassifier
+      ? { behavesAs: 'claude-haiku-4-5', maxEffort: 'low' } : {}),
   };
 }
 
-export function desktopProfile(token, strategy = 'optimal', models = []) {
+function addClassifier(models, strategy) {
+  if (strategy !== 'cheaper' || models.some(({ id }) => desktopModelName(id) === cheapClassifier.id)) return models;
+  return [...models, cheapClassifier];
+}
+
+export function desktopProfile(token, strategy = 'optimal', models = [], { legacy = false, hasClassifier = false } = {}) {
+  const cheap = strategy === 'cheaper' && !legacy;
   return {
     inferenceProvider: 'gateway',
     inferenceGatewayBaseUrl: desktopGateway,
@@ -45,9 +54,42 @@ export function desktopProfile(token, strategy = 'optimal', models = []) {
       labelOverride: profileName,
       anthropicFamilyTier: 'fable',
       isFamilyDefault: true,
-    }, ...models.map(desktopModelEntry)],
+    }, ...addClassifier(models, cheap && !hasClassifier ? 'cheaper' : 'optimal').map(desktopModelEntry)],
     modelDiscoveryEnabled: false,
+    ...(cheap ? {
+      autoModeClassifierModel: autoClaudeClassifier,
+      claudeCodeSettings: { env: cheapClaudeModels(desktopModel) },
+    } : {}),
   };
+}
+
+function applyServiceModels(profile, nextProfile, strategy, previous) {
+  const overrides = cheapClaudeModels(desktopModel);
+  const settings = { ...profile.claudeCodeSettings };
+  const env = { ...settings.env };
+  if (strategy === 'cheaper') {
+    nextProfile.claudeCodeSettings = { ...settings, env: { ...env, ...overrides } };
+    return previous ?? {
+      classifier: profile.autoModeClassifierModel ?? null,
+      hadSettings: Object.hasOwn(profile, 'claudeCodeSettings'),
+      hadEnv: Object.hasOwn(settings, 'env'),
+      env: Object.fromEntries(Object.keys(overrides).map((key) => [key, env[key] ?? null])),
+    };
+  }
+  if (!previous) return;
+  if (nextProfile.autoModeClassifierModel === autoClaudeClassifier) {
+    if (previous.classifier === null) delete nextProfile.autoModeClassifierModel;
+    else nextProfile.autoModeClassifierModel = previous.classifier;
+  }
+  for (const [key, current] of Object.entries(overrides)) {
+    if (env[key] !== current) continue;
+    if (previous.env[key] === null) delete env[key];
+    else env[key] = previous.env[key];
+  }
+  if (!Object.keys(env).length && !previous.hadEnv) delete settings.env;
+  else settings.env = env;
+  if (!Object.keys(settings).length && !previous.hadSettings) delete nextProfile.claudeCodeSettings;
+  else nextProfile.claudeCodeSettings = settings;
 }
 
 export async function findDesktopApp() {
@@ -122,10 +164,11 @@ export async function activateDesktopProfile(token, support = supportRoot(), str
     return id !== desktopModel && !previouslyManaged.has(id);
   });
   const userIds = new Set(existingModels.map((entry) => typeof entry === 'string' ? entry : entry.name));
-  const managed = models.filter(({ id }) => !userIds.has(desktopModelName(id)));
+  const managed = addClassifier(models, userIds.has(cheapClassifier.id) ? 'optimal' : strategy)
+    .filter(({ id }) => !userIds.has(desktopModelName(id)));
   const nextProfile = {
     ...profile.value,
-    ...desktopProfile(token, strategy, managed),
+    ...desktopProfile(token, strategy, managed, { hasClassifier: userIds.has(cheapClassifier.id) }),
     inferenceCustomHeaders: {
       ...Object.fromEntries(Object.entries(profile.value.inferenceCustomHeaders || {})
         .filter(([name]) => name.toLowerCase() !== strategyHeader.toLowerCase())),
@@ -137,6 +180,7 @@ export async function activateDesktopProfile(token, support = supportRoot(), str
     alwaysStartWithDefaultModel: true,
     modelCatalogEnabled: false,
   };
+  const serviceModels = applyServiceModels(profile.value, nextProfile, strategy, managedModels.value.serviceModels);
   nextProfile.inferenceModels.push(...existingModels);
   const entries = [...(meta.value.entries || [])];
   const index = entries.findIndex((entry) => entry.id === profileId);
@@ -151,7 +195,10 @@ export async function activateDesktopProfile(token, support = supportRoot(), str
   return saveProfileFiles([
     ...previous,
     [profile, nextProfile],
-    ...(managed.length || managedModels.original !== undefined ? [[managedModels, { ids: managed.map(({ id }) => desktopModelName(id)) }]] : []),
+    ...(managed.length || managedModels.original !== undefined ? [[managedModels, {
+      ids: managed.map(({ id }) => desktopModelName(id)),
+      ...(serviceModels ? { serviceModels } : {}),
+    }]] : []),
     ...preferences.map((file) => [file, { ...file.value, deploymentMode: '3p' }]),
     [meta, nextMeta],
   ]);
@@ -224,6 +271,9 @@ export async function openDesktop(app, token, strategy, models = []) {
   const { data } = await response.json();
   if (!Array.isArray(data) || !data.some((model) => model?.id === desktopModel)) {
     throw new Error('Шлюз Claude Desktop не вернул модель APIHub Auto.');
+  }
+  if (strategy === 'cheaper' && !data.some((model) => model?.id === autoClaudeClassifier)) {
+    throw new Error('Шлюз ещё не поддерживает дешёвый маршрут Auto для проверки действий Claude Desktop.');
   }
 
   const changed = await activateDesktopProfile(token, undefined, strategy, models);

@@ -8,6 +8,17 @@ export const model = 'apihub-auto';
 export const defaultGateway = 'https://g.gnzs.pro/g/v1';
 export const strategies = ['optimal', 'cheaper', 'faster', 'reliable'];
 export const strategyHeader = 'X-APIHub-Strategy';
+export const autoClaudeClassifier = 'apihub-auto/claude-haiku-4-5';
+
+export function cheapClaudeModels(autoModel = model) {
+  return {
+    CLAUDE_CODE_SUBAGENT_MODEL: autoModel,
+    CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1',
+    CLAUDE_CODE_AUTO_MODE_MODEL: autoClaudeClassifier,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: autoModel,
+    ANTHROPIC_SMALL_FAST_MODEL: autoModel,
+  };
+}
 
 export function gatewayBase(value) {
   let url;
@@ -102,6 +113,7 @@ export function prepareClaudeCodeSettings(strategy, base, token, original) {
   settings.model = model;
   settings.env = {
     ...env,
+    ...(strategy === 'cheaper' ? cheapClaudeModels() : {}),
     ANTHROPIC_BASE_URL: base,
     ANTHROPIC_AUTH_TOKEN: token,
     ANTHROPIC_CUSTOM_MODEL_OPTION: model,
